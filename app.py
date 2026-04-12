@@ -92,5 +92,418 @@ def save_chats(threads):
 if 'setup_complete' not in st.session_state: st.session_state.setup_complete = False
 if 'model_name' not in st.session_state: st.session_state.model_name = ""
 if 'mode' not in st.session_state: st.session_state.mode = "local"
-if 'base_output_dir' not in st.session_state: st.session_state.base_output_dir = os.pat
-# WIP Threads
+if 'base_output_dir' not in st.session_state: st.session_state.base_output_dir = os.path.join(os.getcwd(), "output")
+if 'run_trigger' not in st.session_state: st.session_state.run_trigger = False
+if 'pending_text' not in st.session_state: st.session_state.pending_text = ""
+if 'open_sidebar_file' not in st.session_state: st.session_state.open_sidebar_file = None
+if 'last_audio_hash' not in st.session_state: st.session_state.last_audio_hash = None
+if 'last_file_hash' not in st.session_state: st.session_state.last_file_hash = None
+if 'last_doc_hash' not in st.session_state: st.session_state.last_doc_hash = None
+if 'threads' not in st.session_state: st.session_state.threads = load_chats()
+if 'active_thread' not in st.session_state:
+    st.session_state.active_thread = list(st.session_state.threads.keys())[0] if st.session_state.threads else "General"
+if 'available_apis' not in st.session_state: st.session_state.available_apis = get_available_apis()
+if 'available_local_models' not in st.session_state: st.session_state.available_local_models = check_ollama_models()
+
+
+# ═══════════════════════════════════════════════
+# PHASE 1 — SETUP
+# ═══════════════════════════════════════════════
+if not st.session_state.setup_complete:
+
+    # Centered layout for setup
+    left_pad, center, right_pad = st.columns([1, 2, 1])
+
+    with center:
+        st.markdown("")
+        st.markdown('<div class="aura-title">🎙️ Aura</div>', unsafe_allow_html=True)
+        st.markdown('<div class="aura-subtitle">Voice-powered AI agent.</div>', unsafe_allow_html=True)
+
+        mode_col1, mode_col2 = st.columns(2)
+        with mode_col1:
+            if st.button("🖥️ Use Local Mode", use_container_width=True, type="primary" if st.session_state.mode == "local" else "secondary"):
+                st.session_state.mode = "local"
+                st.rerun()
+        with mode_col2:
+            if st.button("🌐 Use Global Mode", use_container_width=True, type="primary" if st.session_state.mode == "global" else "secondary"):
+                st.session_state.mode = "global"
+                st.rerun()
+
+        st.markdown("---")
+
+        is_local = st.session_state.mode == "local"
+
+        st.markdown(f"**{('🖥️ Local Configuration' if is_local else '🌐 Global Configuration')}**")
+
+        if is_local:
+            if st.session_state.available_local_models:
+                sel_model = st.selectbox("Local Model", st.session_state.available_local_models, disabled=not is_local)
+            else:
+                st.error("❌ Ollama not found or no models available.")
+                st.info("Make sure Ollama is running.")
+                if st.button("🔄 Check again", disabled=not is_local):
+                    st.session_state.available_local_models = check_ollama_models()
+                    st.rerun()
+                sel_model = ""
+        else:
+            if st.session_state.available_apis:
+                provider = st.selectbox("Cloud Provider", [a.upper() for a in st.session_state.available_apis], disabled=is_local)
+                sel_model = provider.lower()
+            else:
+                st.error("❌ No API keys found.")
+                st.info("Add `GROQ_API_KEY` or `OPENAI_API_KEY` to your `.env` file.")
+                if st.button("🔄 Check again", disabled=is_local):
+                    st.session_state.available_apis = get_available_apis()
+                    st.rerun()
+                sel_model = ""
+
+        st.markdown("---")
+        pass
+        disable_launch = False
+        if is_local and not st.session_state.available_local_models: disable_launch = True
+        if not is_local and not st.session_state.available_apis: disable_launch = True
+
+        if st.button("🚀 Launch Aura", use_container_width=True, type="primary", disabled=disable_launch):
+            st.session_state.model_name = sel_model
+            st.session_state.output_dir = os.path.join(os.getcwd(), "output")
+            st.session_state.setup_complete = True
+            st.rerun()
+
+
+# ═══════════════════════════════════════════════
+# PHASE 2 — DASHBOARD
+# ═══════════════════════════════════════════════
+else:
+    # Workspace Isolation Sync
+    safe_thread = re.sub(r'[\\/*?:"<>|.]', "", st.session_state.active_thread).strip()
+    if not safe_thread: safe_thread = "default"
+    st.session_state.output_dir = os.path.join(st.session_state.base_output_dir, safe_thread)
+    os.makedirs(st.session_state.output_dir, exist_ok=True)
+
+    # ── Sidebar ──
+    with st.sidebar:
+        st.markdown("### 🎙️ Aura")
+        mode_label = "Local" if st.session_state.mode == "local" else "Cloud"
+        st.caption(f"{mode_label} · {st.session_state.model_name.upper()}")
+
+        st.markdown("---")
+
+        if st.button("⚙️ Settings", use_container_width=True):
+            st.session_state.setup_complete = False
+            st.rerun()
+
+        st.markdown("---")
+        st.markdown("**Threads**")
+        if st.button("＋ New thread", use_container_width=True):
+            new_id = f"New Chat {len(st.session_state.threads) + 1}"
+            st.session_state.threads[new_id] = []
+            st.session_state.active_thread = new_id
+            st.session_state.pending_text = ""
+            st.session_state.last_audio_hash = None
+            st.session_state.last_doc_hash = None
+            save_chats(st.session_state.threads)
+            st.rerun()
+
+        for t_id in list(st.session_state.threads.keys()):
+            is_active = t_id == st.session_state.active_thread
+            col1, col2, col3 = st.columns([5, 1, 1])
+            with col1:
+                if st.button(t_id, key=f"sb_{t_id}", use_container_width=True, type="primary" if is_active else "secondary"):
+                    st.session_state.active_thread = t_id
+                    st.session_state.pending_text = ""
+                    st.session_state.last_audio_hash = None
+                    st.session_state.last_doc_hash = None
+                    st.rerun()
+            with col2:
+                if st.button("🧹", key=f"clr_{t_id}", help="Clear chat"):
+                    st.session_state.threads[t_id] = []
+                    save_chats(st.session_state.threads)
+                    clr_dir = os.path.join(st.session_state.base_output_dir, re.sub(r'[\\/*?:"<>|.]', "", t_id).strip())
+                    if os.path.exists(clr_dir): shutil.rmtree(clr_dir, ignore_errors=True)
+                    st.rerun()
+            with col3:
+                if st.button("✕", key=f"del_{t_id}", help="Delete chat"):
+                    del st.session_state.threads[t_id]
+                    if st.session_state.active_thread == t_id:
+                        st.session_state.active_thread = list(st.session_state.threads.keys())[0] if st.session_state.threads else "General"
+                    save_chats(st.session_state.threads)
+                    del_dir = os.path.join(st.session_state.base_output_dir, re.sub(r'[\\/*?:"<>|.]', "", t_id).strip())
+                    if os.path.exists(del_dir): shutil.rmtree(del_dir, ignore_errors=True)
+                    st.rerun()
+        
+        if st.session_state.active_thread != "General":
+            new_name = st.text_input("Rename Active Chat", value=st.session_state.active_thread, key="rename_input")
+            if new_name != st.session_state.active_thread and new_name not in st.session_state.threads:
+                old_safe = re.sub(r'[\\/*?:"<>|.]', "", st.session_state.active_thread).strip()
+                new_safe = re.sub(r'[\\/*?:"<>|.]', "", new_name).strip()
+                old_dir = os.path.join(st.session_state.base_output_dir, old_safe)
+                new_dir = os.path.join(st.session_state.base_output_dir, new_safe)
+                if os.path.exists(old_dir) and not os.path.exists(new_dir):
+                    os.rename(old_dir, new_dir)
+                    
+                st.session_state.threads[new_name] = st.session_state.threads.pop(st.session_state.active_thread)
+                st.session_state.active_thread = new_name
+                save_chats(st.session_state.threads)
+                st.rerun()
+
+        st.markdown("---")
+        st.markdown("**Files**")
+        
+        with st.expander("＋ New Folder"):
+            new_f_name = st.text_input("Folder Name", key="new_f_input")
+            if st.button("Create Folder", use_container_width=True) and new_f_name:
+                os.makedirs(os.path.join(st.session_state.output_dir, new_f_name), exist_ok=True)
+                st.rerun()
+
+        if st.button("🗑️ Clear All", use_container_width=True):
+            if os.path.exists(st.session_state.output_dir):
+                shutil.rmtree(st.session_state.output_dir, ignore_errors=True)
+            os.makedirs(st.session_state.output_dir, exist_ok=True)
+            st.rerun()
+
+        # File routing logic
+        if not os.path.exists(st.session_state.output_dir): os.makedirs(st.session_state.output_dir)
+        items = os.listdir(st.session_state.output_dir)
+        folders = [f for f in items if os.path.isdir(os.path.join(st.session_state.output_dir, f))]
+        files = [f for f in items if os.path.isfile(os.path.join(st.session_state.output_dir, f))]
+
+        # Render Root Files
+        for f in files:
+            fp = os.path.join(st.session_state.output_dir, f)
+            is_expanded = (st.session_state.open_sidebar_file == f)
+            with st.expander(f"📄 {f}", expanded=is_expanded):
+                col_r, col_df = st.columns([5, 1])
+                with col_r:
+                    new_f = st.text_input("Rename", value=f, key=f"rn_{f}", label_visibility="collapsed")
+                    if new_f != f and new_f.strip():
+                        os.rename(fp, os.path.join(st.session_state.output_dir, new_f.strip()))
+                        st.rerun()
+                with col_df:
+                    if st.button("🗑️", key=f"del_{f}", help="Delete File"):
+                        os.unlink(fp)
+                        st.rerun()
+
+                with open(fp, "r", encoding="utf-8") as file_: c = file_.read()
+                st.download_button("Download", data=c, file_name=f, key=f"dl_{f}")
+                st.code(c, language="python" if f.endswith(".py") else None)
+                if folders:
+                    target_dir = st.selectbox("Move into folder...", ["-- Select --"] + folders, key=f"mv_{f}")
+                    if target_dir != "-- Select --":
+                        shutil.move(fp, os.path.join(st.session_state.output_dir, target_dir, f))
+                        st.rerun()
+
+        # Render Folders
+        for d in folders:
+            dp = os.path.join(st.session_state.output_dir, d)
+            subfiles = [f for f in os.listdir(dp) if os.path.isfile(os.path.join(dp, f))]
+            folder_expanded = (st.session_state.open_sidebar_file in subfiles)
+            with st.expander(f"📁 {d} ({len(subfiles)})", expanded=folder_expanded):
+                c_rn, c_del = st.columns([5,1])
+                with c_rn:
+                    new_d = st.text_input("Rename folder", value=d, key=f"rn_{d}", label_visibility="collapsed")
+                    if new_d != d and new_d.strip():
+                        os.rename(dp, os.path.join(st.session_state.output_dir, new_d.strip()))
+                        st.rerun()
+                with c_del:
+                    if st.button("🗑️", key=f"del_{d}", help="Delete Folder"):
+                        shutil.rmtree(dp, ignore_errors=True)
+                        st.rerun()
+
+                st.markdown("---")
+                if not subfiles: st.caption("Empty folder")
+                for sf in subfiles:
+                    sfp = os.path.join(dp, sf)
+                    is_active = (st.session_state.open_sidebar_file == sf)
+                    
+                    if is_active: st.markdown(f"**👉 `{sf}`**")
+                    else: st.markdown(f"`{sf}`")
+                    
+                    c_rn_sf, c_del_sf = st.columns([5, 1])
+                    with c_rn_sf:
+                        new_sf = st.text_input("Rename subfile", value=sf, key=f"rn_{d}_{sf}", label_visibility="collapsed")
+                        if new_sf != sf and new_sf.strip():
+                            os.rename(sfp, os.path.join(dp, new_sf.strip()))
+                            st.rerun()
+                    with c_del_sf:
+                        if st.button("🗑️", key=f"del_{d}_{sf}"):
+                            os.unlink(sfp)
+                            st.rerun()
+
+                    col_u, col_d2 = st.columns(2)
+                    with col_u:
+                        if st.button("Up ↰", key=f"up_{d}_{sf}", help="Move to root"):
+                            shutil.move(sfp, os.path.join(st.session_state.output_dir, sf))
+                            st.rerun()
+                    with col_d2:
+                        with open(sfp, "r", encoding="utf-8") as sfile_: sc = sfile_.read()
+                        st.download_button("💾 Download", data=sc, file_name=sf, key=f"dl_{d}_{sf}")
+                        
+                    show_code = st.checkbox(f"👁️ View file code", value=is_active, key=f"view_{d}_{sf}")
+                    if show_code: 
+                        st.code(sc, language="python" if sf.endswith(".py") else None)
+                    st.markdown("---")
+
+    # ── Header ──
+    st.markdown(f"### 💬 {st.session_state.active_thread}")
+
+    # ── Input Bar ──
+    input_key = f"cmd_input_{st.session_state.active_thread}"
+    if input_key not in st.session_state:
+        st.session_state[input_key] = ""
+
+    def append_to_input(text):
+        if st.session_state[input_key].strip():
+            st.session_state[input_key] += f"\n\n{text}"
+        else:
+            st.session_state[input_key] = text
+
+    col_mic, col_file, col_doc = st.columns(3)
+
+    with col_mic:
+        try:
+            audio_bytes = st.audio_input("🎤 Record command manually")
+            if audio_bytes:
+                current_audio_hash = hash(audio_bytes.getvalue())
+                if current_audio_hash != st.session_state.last_audio_hash:
+                    with open('r.wav', 'wb') as f: f.write(audio_bytes.getbuffer())
+                    with st.spinner("Extracting voice..."):
+                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.model_name).transcribe('r.wav')
+                        append_to_input(t)
+                        st.session_state.last_audio_hash = current_audio_hash
+                    st.rerun()
+        except AttributeError:
+            st.warning("Update Streamlit to use native Audio UI.")
+
+    with col_file:
+        up = st.file_uploader("📁 Translate audio file", type=["wav", "mp3"])
+        if up:
+            current_file_hash = hash(up.getvalue())
+            if current_file_hash != st.session_state.last_file_hash:
+                with open("t.wav", "wb") as f: f.write(up.getbuffer())
+                with st.spinner("Extracting audio..."):
+                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.model_name).transcribe('t.wav')
+                    append_to_input(t)
+                    st.session_state.last_file_hash = current_file_hash
+                st.rerun()
+                
+    with col_doc:
+        doc = st.file_uploader("📄 Upload text/code doc", type=["txt", "md", "py", "java", "json", "csv", "html", "js"])
+        if doc:
+            doc_hash = hash(doc.getvalue())
+            if st.session_state.last_doc_hash != doc_hash:
+                with st.spinner("Extracting text..."):
+                    try:
+                        extracted = doc.getvalue().decode('utf-8')
+                        append_to_input(f"```\n{extracted}\n```")
+                        st.session_state.last_doc_hash = doc_hash
+                    except Exception:
+                        st.error("Failed to read document text.")
+                st.rerun()
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col_input, col_btn = st.columns([8, 1])
+    with col_input:
+        st.text_area("Review Transcribed Text / Type Command", height=68, placeholder="Press Ctrl+Enter to effortlessly submit your command...", key=input_key)
+        f_cmd = st.session_state[input_key]
+    with col_btn:
+        st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
+        is_error = "❌" in f_cmd
+        
+        def handle_submit():
+            val = st.session_state[input_key]
+            if val.strip() and not ("❌" in val):
+                st.session_state.last_transcription = val
+                st.session_state[input_key] = ""
+                st.session_state.run_trigger = True
+                
+        st.button("➤ Submit", use_container_width=True, type="primary", disabled=is_error, on_click=handle_submit)
+
+    st.markdown("---")
+
+    # ── Chat History ──
+    if st.session_state.active_thread not in st.session_state.threads:
+        st.session_state.threads[st.session_state.active_thread] = []
+        save_chats(st.session_state.threads)
+        
+    history = st.session_state.threads[st.session_state.active_thread]
+    with st.container(height=450):
+        if not history:
+            st.markdown('<div class="empty-state">No messages yet.<br>Type a command above to begin.</div>', unsafe_allow_html=True)
+        for idx, msg in enumerate(history):
+            if msg['role'] == 'user':
+                st.markdown(f'<div class="chat-user"><b>🎙️ Transcribed Text:</b><br>{msg["content"]}</div>', unsafe_allow_html=True)
+            else:
+                intent_val = msg.get("intent", "UNKNOWN").upper()
+                ex_t = msg.get("execution_time")
+                time_badge = f'<span style="float: right; color:#a6accd;">Time: {ex_t}s</span>' if ex_t is not None else ""
+                
+                st.markdown(f'<div class="chat-bot">', unsafe_allow_html=True)
+                st.markdown(f'<div style="font-size:0.75rem; color:#89b4fa; font-weight:700; margin-bottom: 6px;">🧠 DETECTED INTENT: {intent_val}{time_badge}</div>', unsafe_allow_html=True)
+                
+                if msg.get('file_data'):
+                    fd = msg['file_data']
+                    st.markdown(f'<b>⚙️ Action Taken:</b> Invoked local file system module.<br>', unsafe_allow_html=True)
+                    st.markdown(f'<b>✅ Final Output:</b> Successfully created and routed <code>{fd["name"]}</code>.<br><br>', unsafe_allow_html=True)
+                    
+                    if st.button(f"🔍 Show '{fd['name']}' in Sidebar Explorer", key=f"btn_open_{idx}"):
+                        st.session_state.open_sidebar_file = fd['name']
+                        st.rerun()
+                else:
+                    action_txt = "Processed text summary via LLM." if intent_val == "SUMMARIZE" else "Generated conversational text response based on context."
+                    st.markdown(f'<b>⚙️ Action Taken:</b> {action_txt}<br>', unsafe_allow_html=True)
+                    st.markdown(f'<b>✅ Final Output:</b><br>{msg["content"]}</div>', unsafe_allow_html=True)
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Agent Execution ──
+    if st.session_state.run_trigger:
+        try:
+            with st.status("Processing…", expanded=True) as status:
+                agent = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.model_name)
+                start_t = time.time()
+                res = agent.execute(st.session_state.last_transcription, st.session_state.output_dir, history)
+                elapsed = round(time.time() - start_t, 2)
+                is_first_msg = len(history) == 0
+                
+                # Append user msg
+                st.session_state.threads[st.session_state.active_thread].append(
+                    {"role": "user", "content": st.session_state.last_transcription}
+                )
+                
+                # Append bot msg with potential file_data and intent
+                st.session_state.threads[st.session_state.active_thread].append(
+                    {
+                        "role": "assistant", 
+                        "content": res["result"], 
+                        "file_data": res.get("file_data"),
+                        "intent": res.get("intent", "CHAT"),
+                        "execution_time": elapsed
+                    }
+                )
+                
+                # Auto-name thread based on first prompt
+                if is_first_msg and st.session_state.active_thread.startswith("New Chat"):
+                    short_desc = st.session_state.last_transcription[:25].strip()
+                    auto_name = f"{short_desc}..." if len(st.session_state.last_transcription) > 25 else short_desc
+                    # Ensure uniqueness
+                    if auto_name in st.session_state.threads: auto_name += " (1)"
+                    
+                    old_safe = re.sub(r'[\\/*?:"<>|.]', "", st.session_state.active_thread).strip()
+                    new_safe = re.sub(r'[\\/*?:"<>|.]', "", auto_name).strip()
+                    old_dir = os.path.join(st.session_state.base_output_dir, old_safe)
+                    new_dir = os.path.join(st.session_state.base_output_dir, new_safe)
+                    if os.path.exists(old_dir) and not os.path.exists(new_dir):
+                        os.rename(old_dir, new_dir)
+                        
+                    st.session_state.threads[auto_name] = st.session_state.threads.pop(st.session_state.active_thread)
+                    st.session_state.active_thread = auto_name
+
+                save_chats(st.session_state.threads)
+                status.update(label="Done", state="complete")
+            st.session_state.run_trigger = False
+            st.session_state.last_transcription = ""
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error: {e}")
+            st.session_state.run_trigger = False
