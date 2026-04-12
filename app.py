@@ -183,8 +183,22 @@ else:
     # ── Sidebar ──
     with st.sidebar:
         st.markdown("### 🎙️ Aura")
-        mode_label = "Local" if st.session_state.mode == "local" else "Cloud"
-        st.caption(f"{mode_label} · {st.session_state.model_name.upper()}")
+        mode_label = "🖥️ Local Model" if st.session_state.mode == "local" else "🌐 Global API"
+        
+        if st.session_state.mode == "local":
+            avail = check_ollama_models()
+            idx = avail.index(st.session_state.model_name) if st.session_state.model_name in avail else 0
+            new_mod = st.selectbox(mode_label, avail, index=idx, label_visibility="collapsed")
+            if new_mod and new_mod != st.session_state.model_name:
+                st.session_state.model_name = new_mod
+                st.rerun()
+        else:
+            avail = [a.upper() for a in st.session_state.available_apis]
+            idx = avail.index(st.session_state.model_name.upper()) if st.session_state.model_name.upper() in avail else 0
+            new_mod = st.selectbox(mode_label, avail, index=idx, label_visibility="collapsed")
+            if new_mod and new_mod.lower() != st.session_state.model_name:
+                st.session_state.model_name = new_mod.lower()
+                st.rerun()
 
         st.markdown("---")
 
