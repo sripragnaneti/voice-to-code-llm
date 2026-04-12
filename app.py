@@ -167,7 +167,15 @@ else:
     st.session_state.output_dir = os.path.join(st.session_state.base_output_dir, safe_thread)
     os.makedirs(st.session_state.output_dir, exist_ok=True)
 
-    # ── Input Methods (Top Tier) ──
+    # ── Dashboard UI ──
+    st.markdown('<div class="main-header">🌌 Aura Orchestrator Dashboard</div>', unsafe_allow_html=True)
+    
+    # Sidebar/Mic Integration Helper
+    def append_to_input(t):
+        st.session_state.last_transcription = t
+        st.session_state.run_trigger = True
+
+    # High-Resolution Multimodal Input Grid (Top Aligned)
     st.markdown('<div class="label-text" style="margin-top: -10px;">⚡ Multimodal Input Pipeline</div>', unsafe_allow_html=True)
     col_code, col_file, col_sum = st.columns(3)
     

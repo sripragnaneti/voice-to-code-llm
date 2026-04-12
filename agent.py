@@ -47,7 +47,7 @@ class LocalAIAgent:
 
     def transcribe(self, audio_path):
         # Allow Whisper to output text even if it misidentifies the language 
-        # (e.g. noisy English mistakenly tagged as 'ar' or 'de')
+        # (e.g. noisy audio or speech with strong accents)
         result = self.stt_model.transcribe(audio_path)
         text = result.get("text", "").strip()
         lang = result.get("language", "en")

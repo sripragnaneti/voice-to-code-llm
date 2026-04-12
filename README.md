@@ -39,6 +39,3 @@ However, to ensure high performance across varying hardware specifications (incl
 4. **Latency Monitor**: A dedicated background thread monitors execution time and provides real-time UI feedback.
 5. **Tool Execution**: Python modules handle file I/O or text summarization based on the detected intent.
 6. **Output**: Results are displayed in a premium Streamlit interface.
-
----
-*Developed as part of the specialized Voice AI Agent project.*
