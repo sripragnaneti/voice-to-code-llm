@@ -182,8 +182,14 @@ else:
                 with open(buf_p, 'wb') as f: f.write(audio_code.getbuffer())
                 with st.spinner("Extracting logic..."):
                     t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_p)
-                    if t.startswith("LANG_ERR"): st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
-                    else: append_to_input(t)
+                    if t.startswith("LANG_ERR"): 
+                        st.error(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                    elif t.startswith("LANG_WARN"):
+                        clean_t = t.replace("LANG_WARN: ", "")
+                        st.toast("💡 Low confidence transcription (noisy/accent detected). Proceeding...", icon="⚠️")
+                        append_to_input(clean_t)
+                    else: 
+                        append_to_input(t)
                     st.session_state.last_audio_hash = curr_h
                 st.rerun()
 
@@ -198,8 +204,14 @@ else:
                 with open(up_p, "wb") as f: f.write(up.getbuffer())
                 with st.spinner("Processing logic file..."):
                     t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(up_p)
-                    if t.startswith("LANG_ERR"): st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
-                    else: append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{t}\n--- END SOURCE ---")
+                    if t.startswith("LANG_ERR"): 
+                        st.error(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                    elif t.startswith("LANG_WARN"):
+                        clean_t = t.replace("LANG_WARN: ", "")
+                        st.toast("💡 Low confidence source detected. Processing anyway...", icon="⚠️")
+                        append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{clean_t}\n--- END SOURCE ---")
+                    else: 
+                        append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{t}\n--- END SOURCE ---")
                     st.session_state.last_file_hash = curr_f_h
                 st.rerun()
 
@@ -214,7 +226,13 @@ else:
                 with open(buf_p, 'wb') as f: f.write(audio_summ.getbuffer())
                 with st.spinner("Drafting summary..."):
                     t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_p)
-                    if t.startswith("LANG_ERR"): st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                    if t.startswith("LANG_ERR"): 
+                        st.error(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                    elif t.startswith("LANG_WARN"):
+                        clean_t = t.replace("LANG_WARN: ", "")
+                        st.toast("💡 Low confidence summary. Drafting...", icon="⚠️")
+                        append_to_input(f"Summarize this concisely: {clean_t}")
+                        st.session_state.run_trigger = True
                     else:
                         append_to_input(f"Summarize this concisely: {t}")
                         st.session_state.run_trigger = True

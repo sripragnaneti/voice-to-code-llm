@@ -46,14 +46,20 @@ class LocalAIAgent:
         return self._stt_model
 
     def transcribe(self, audio_path):
+        # Allow Whisper to output text even if it misidentifies the language 
+        # (e.g. noisy English mistakenly tagged as 'ar' or 'de')
         result = self.stt_model.transcribe(audio_path)
+        text = result.get("text", "").strip()
         lang = result.get("language", "en")
         
-        # Strictly allow only English for maximum phonetic accuracy
-        if lang != "en":
-            return "LANG_ERR: Audio unclear, speak again."
+        if not text:
+            return "LANG_ERR: No speech detected. Please speak again."
             
-        return result["text"]
+        # Soft Guard: Allow the text through but notify the system of a low-confidence match
+        if lang != "en":
+            return f"LANG_WARN: {text}"
+            
+        return text
 
     def _chat(self, messages):
         """Unified chat call dispatcher."""
