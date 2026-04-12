@@ -1,4 +1,25 @@
-output/
-.env
+# Streamlit
+.streamlit/
+static/
+
+# Python
 __pycache__/
-*.json
+*.py[cod]
+*$py.class
+.venv
+venv/
+ENV/
+env/
+.env
+
+# Aura Specific
+output/
+.aura_chats.json
+.audio_cache/
+*.wav
+*.mp3
+
+# Scratch
+scratch_*.py
+finalize_git.py
+construct_history.py
