@@ -357,7 +357,7 @@ else:
         else:
             st.session_state[input_key] = text
 
-    col_mic, col_file, col_doc = st.columns(3)
+    col_mic, col_file, col_temp = st.columns(2)
 
     with col_mic:
         try:
@@ -436,7 +436,7 @@ else:
             else:
                 intent_val = msg.get("intent", "UNKNOWN").upper()
                 ex_t = msg.get("execution_time")
-                time_badge = f'<span style="float: right; color:#a6accd;">Time: {ex_t}s</span>' if ex_t is not None else ""
+                time_badge = f'<span style="float: right; color:#a6accd;">⏱️ {ex_t}s</span>' if ex_t is not None else ""
                 
                 st.markdown(f'<div class="chat-bot">', unsafe_allow_html=True)
                 st.markdown(f'<div style="font-size:0.75rem; color:#89b4fa; font-weight:700; margin-bottom: 6px;">🧠 DETECTED INTENT: {intent_val}{time_badge}</div>', unsafe_allow_html=True)
