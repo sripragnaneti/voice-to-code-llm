@@ -27,8 +27,6 @@ def get_available_apis():
     apis = []
     if os.getenv("GROQ_API_KEY"):
         apis.append("groq")
-    if os.getenv("OPENAI_API_KEY"):
-        apis.append("openai")
     return apis
 
 def has_local_models():

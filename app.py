@@ -1,5 +1,5 @@
 import streamlit as st
-import os, shutil, re, json, time
+import os, shutil, re, json, time, threading
 from agent import LocalAIAgent
 from tools import list_files
 from config_utils import get_available_apis, check_ollama_models, has_local_models
@@ -115,61 +115,37 @@ if 'available_local_models' not in st.session_state: st.session_state.available_
 # PHASE 1 — SETUP
 # ═══════════════════════════════════════════════
 if not st.session_state.setup_complete:
-
     # Centered layout for setup
     left_pad, center, right_pad = st.columns([1, 2, 1])
 
     with center:
         st.markdown("")
         st.markdown('<div class="aura-title">🎙️ Aura</div>', unsafe_allow_html=True)
-        st.markdown('<div class="aura-subtitle">Voice-powered AI agent.</div>', unsafe_allow_html=True)
-
-        mode_col1, mode_col2 = st.columns(2)
-        with mode_col1:
-            if st.button("🖥️ Use Local Mode", use_container_width=True, type="primary" if st.session_state.mode == "local" else "secondary"):
-                st.session_state.mode = "local"
-                st.rerun()
-        with mode_col2:
-            if st.button("🌐 Use Global Mode", use_container_width=True, type="primary" if st.session_state.mode == "global" else "secondary"):
-                st.session_state.mode = "global"
-                st.rerun()
+        st.markdown('<div class="aura-subtitle">Trilingual Voice-to-Code Platform</div>', unsafe_allow_html=True)
 
         st.markdown("---")
-
-        is_local = st.session_state.mode == "local"
-
-        st.markdown(f"**{('🖥️ Local Configuration' if is_local else '🌐 Global Configuration')}**")
-
-        if is_local:
-            if st.session_state.available_local_models:
-                sel_model = st.selectbox("Local Model", st.session_state.available_local_models, disabled=not is_local)
-            else:
-                st.error("❌ Ollama not found or no models available.")
-                st.info("Make sure Ollama is running.")
-                if st.button("🔄 Check again", disabled=not is_local):
-                    st.session_state.available_local_models = check_ollama_models()
-                    st.rerun()
-                sel_model = ""
+        st.markdown("### 🖥️ Local Workbench")
+        
+        if st.session_state.available_local_models:
+            sel_model = st.selectbox("Select Your Primary Local Engine", st.session_state.available_local_models)
         else:
-            if st.session_state.available_apis:
-                provider = st.selectbox("Cloud Provider", [a.upper() for a in st.session_state.available_apis], disabled=is_local)
-                sel_model = provider.lower()
-            else:
-                st.error("❌ No API keys found.")
-                st.info("Add `GROQ_API_KEY` or `OPENAI_API_KEY` to your `.env` file.")
-                if st.button("🔄 Check again", disabled=is_local):
-                    st.session_state.available_apis = get_available_apis()
-                    st.rerun()
-                sel_model = ""
-
+            st.error("❌ Ollama not found. Please ensure Ollama is running.")
+            if st.button("🔄 Refresh Local Models"):
+                st.session_state.available_local_models = check_ollama_models()
+                st.rerun()
+            st.stop()
+            
         st.markdown("---")
-        pass
-        disable_launch = False
-        if is_local and not st.session_state.available_local_models: disable_launch = True
-        if not is_local and not st.session_state.available_apis: disable_launch = True
+        
+        with st.expander("⚙️ Advanced Workspace Optimization"):
+            st.session_state.base_output_dir = st.text_input("Local Project Workspace", value=st.session_state.base_output_dir)
+            # Latency fallback threshold
+            if 'latency_threshold' not in st.session_state: st.session_state.latency_threshold = 15
+            st.session_state.latency_threshold = st.slider("Latency Fallback Threshold (Seconds)", 5, 60, st.session_state.latency_threshold, help="Switch suggestion triggered after this time")
 
-        if st.button("🚀 Launch Aura", use_container_width=True, type="primary", disabled=disable_launch):
+        if st.button("🚀 Launch Aura", use_container_width=True, type="primary"):
             st.session_state.threads[st.session_state.active_thread]['model'] = sel_model
+            st.session_state.mode = "local" # Strictly local on launch
             st.session_state.output_dir = os.path.join(os.getcwd(), "output")
             st.session_state.setup_complete = True
             save_chats(st.session_state.threads)
@@ -180,8 +156,13 @@ if not st.session_state.setup_complete:
 # PHASE 2 — DASHBOARD
 # ═══════════════════════════════════════════════
 else:
+    # Workplace Cache
+    CACHE_DIR = ".audio_cache"
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    
     # Workspace Isolation Sync
-    safe_thread = re.sub(r'[\\/*?:"<>|.]', "", st.session_state.active_thread).strip()
+    # Force lowercase and strip to prevent Windows path case-desync
+    safe_thread = re.sub(r'[\\/*?:"<>|.]', "", st.session_state.active_thread).strip().lower()
     if not safe_thread: safe_thread = "default"
     st.session_state.output_dir = os.path.join(st.session_state.base_output_dir, safe_thread)
     os.makedirs(st.session_state.output_dir, exist_ok=True)
@@ -390,6 +371,66 @@ else:
                 </script>
             """, height=0)
 
+        col_code, col_file, col_sum = st.columns(3)
+        
+        # 1. LIVE CODE COMMAND
+        with col_code:
+            st.markdown('<div class="label-text">🎤 Record Code Command</div>', unsafe_allow_html=True)
+            audio_code = st.audio_input("Code Mic", label_visibility="collapsed", key=f"mic_code_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
+
+            if audio_code:
+                current_hash = hash(audio_code.getvalue())
+                if current_hash != st.session_state.last_audio_hash:
+                    buf_path = os.path.join(".audio_cache", f"mic_{st.session_state.active_thread}.wav")
+                    with open(buf_path, 'wb') as f: f.write(audio_code.getbuffer())
+                    with st.spinner("Extracting logic..."):
+                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_path)
+                        if t.startswith("LANG_ERR"):
+                            st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                        else:
+                            append_to_input(t)
+                        st.session_state.last_audio_hash = current_hash
+                    st.rerun()
+
+        # 2. UPLOAD LOGIC SOURCE
+        with col_file:
+            st.markdown('<div class="label-text">📁 Upload Audio Source</div>', unsafe_allow_html=True)
+            up = st.file_uploader("Audio Upload", type=["wav", "mp3"], label_visibility="collapsed", key=f"up_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
+            
+            if up:
+                current_file_hash = hash(up.getvalue())
+                if current_file_hash != st.session_state.last_file_hash:
+                    up_path = os.path.join(".audio_cache", f"up_{st.session_state.active_thread}.wav")
+                    with open(up_path, "wb") as f: f.write(up.getbuffer())
+                    with st.spinner("Processing logic file..."):
+                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(up_path)
+                        if t.startswith("LANG_ERR"):
+                            st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                        else:
+                            append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{t}\n--- END SOURCE ---")
+                        st.session_state.last_file_hash = current_file_hash
+                    st.rerun()
+
+        # 3. LIVE SUMMARIZE Command
+        with col_sum:
+            st.markdown('<div class="label-text">📝 Record Summarize</div>', unsafe_allow_html=True)
+            audio_summ = st.audio_input("Summ Mic", label_visibility="collapsed", key=f"mic_sum_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
+            
+            if audio_summ:
+                current_sum_hash = hash(audio_summ.getvalue())
+                if current_sum_hash != st.session_state.get('last_sum_hash'):
+                    buf_path = os.path.join(".audio_cache", f"sum_{st.session_state.active_thread}.wav")
+                    with open(buf_path, 'wb') as f: f.write(audio_summ.getbuffer())
+                    with st.spinner("Drafting summary..."):
+                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_path)
+                        if t.startswith("LANG_ERR"):
+                            st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                        else:
+                            append_to_input(f"Summarize this concisely: {t}")
+                            st.session_state.run_trigger = True
+                        st.session_state.last_sum_hash = current_sum_hash
+                    st.rerun()
+
     # ── Header ──
     st.markdown(f"### 💬 {st.session_state.active_thread}")
 
@@ -404,33 +445,6 @@ else:
         else:
             st.session_state[input_key] = text
 
-    col_mic, col_file = st.columns(2)
-
-    with col_mic:
-        try:
-            # Code-focused microphone isolation
-            audio_code = st.audio_input("🎤 Record Code Command", key=f"mic_code_{st.session_state.active_thread}")
-            if audio_code:
-                current_hash = hash(audio_code.getvalue())
-                if current_hash != st.session_state.last_audio_hash:
-                    with open('r.wav', 'wb') as f: f.write(audio_code.getbuffer())
-                    with st.spinner("Extracting logic..."):
-                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe('r.wav')
-                        append_to_input(t)
-                        st.session_state.last_audio_hash = current_hash
-                    st.rerun()
-        except AttributeError:
-            st.warning("Update Streamlit to use native Audio UI.")
-
-    with col_file:
-        up = st.file_uploader("📁 Upload Audio Logic", type=["wav", "mp3"], key=f"uploader_{st.session_state.active_thread}")
-        if up:
-            current_file_hash = hash(up.getvalue())
-            if current_file_hash != st.session_state.last_file_hash:
-                with open("t.wav", "wb") as f: f.write(up.getbuffer())
-                with st.spinner("Processing logic file..."):
-                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe('t.wav')
-                    append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{t}\n--- END SOURCE ---")
                     st.session_state.last_file_hash = current_file_hash
                 st.rerun()
 
@@ -497,10 +511,50 @@ else:
     # ── Agent Execution ──
     if st.session_state.run_trigger:
         try:
-            with st.status("Processing…", expanded=True) as status:
-                agent = LocalAIAgent(mode=st.session_state.mode, model_name=current_thread_model)
+            with st.status("🚀 Aura is thinking...", expanded=True) as status:
                 start_t = time.time()
-                res = agent.execute(st.session_state.last_transcription, st.session_state.output_dir, history)
+                is_first_msg = len(history) == 0
+                res_container = {"data": None, "error": None}
+                
+                # Capture state for thread-safety
+                smode = st.session_state.mode
+                smodel = current_thread_model
+                strans = st.session_state.last_transcription
+                sout = st.session_state.output_dir
+                shist = history
+                sthreshold = st.session_state.latency_threshold
+
+                def run_agent():
+                    try:
+                        agent = LocalAIAgent(mode=smode, model_name=smodel)
+                        res_container["data"] = agent.execute(strans, sout, shist)
+                    except Exception as e: res_container["error"] = str(e)
+
+                t = threading.Thread(target=run_agent)
+                t.start()
+                
+                timer_p = st.empty()
+                fallback_trig = False
+                while t.is_alive():
+                    elap = time.time() - start_t
+                    timer_p.markdown(f"⏱️ **Elapsed:** {elap:.1f}s / {sthreshold}s")
+                    if elap > sthreshold and not fallback_trig:
+                        fallback_trig = True
+                        st.warning("⚠️ Local engine is running slow.")
+                        if st.session_state.get('available_apis'):
+                            if st.button("🚀 Switch to Global (Groq) for Instant Result?", key="fallback_btn"):
+                                st.session_state.mode = "global"
+                                st.session_state.threads[st.session_state.active_thread]['model'] = "groq"
+                                st.rerun()
+                    time.sleep(0.1)
+                t.join()
+                
+                if res_container["error"]:
+                    st.error(f"Error: {res_container['error']}")
+                    res = {"result": "Execution failed.", "intent": "chat"}
+                else:
+                    res = res_container["data"]
+                
                 elapsed = round(time.time() - start_t, 2)
                 is_first_msg = len(history) == 0
                 

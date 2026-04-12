@@ -49,9 +49,9 @@ class LocalAIAgent:
         result = self.stt_model.transcribe(audio_path)
         lang = result.get("language", "en")
         
-        # Explicitly allow English and French
-        if lang not in ["en", "fr"]:
-            return f"❌ Unsupported language detected ({lang}). Please speak in English or French."
+        # Strictly allow only English for maximum phonetic accuracy
+        if lang != "en":
+            return "LANG_ERR: Audio unclear, speak again."
             
         return result["text"]
 
@@ -76,14 +76,19 @@ class LocalAIAgent:
 
     def get_intent_and_refine(self, prompt, history=[]):
         system_prompt = """
-        You are 'Aura', a highly advanced Bilingual AI coding assistant fluent in English and French.
-        You MUST detect the user's language and respond in the SAME language.
+        You are 'Aura', a highly advanced AI Coding Assistant.
         
-        FORMAT: return ONLY JSON: {"intent": "create_file|write_code|create_folder|summarize|chat|clarify", "filename": "...", "content": "..."}
+        OBJECTIVE: Analyze the user's intent and return a clean JSON object.
         
-        CRUCIAL RULE (TRANSCRIPTION ERROR DETECTION):
-        If the prompt contains obvious phonetic transcription errors or lacks logical meaning (in English or French), DO NOT blindly generate code.
-        Set "intent" to "clarify" and ask the user for confirmation in THEIR language.
+        SUPPORTED INTENTS:
+        1. create_file: Use if user wants to build a NEW program or file.
+        2. write_code: Use if user wants to modify an existing file.
+        3. summarize: Use if user wants to digest a large block of text/audio.
+        4. chat: Use for general conversation.
+        
+        FORMAT: return ONLY JSON: {"intent": "create_file|write_code|summarize|chat", "filename": "filename_here.ext", "content": "code_or_text_here"}
+        
+        CRITICAL: If the goal is a program/code, you MUST use 'create_file' or 'write_code'.
         """
         messages = [{'role': 'system', 'content': system_prompt}]
         for msg in history:
@@ -109,6 +114,7 @@ class LocalAIAgent:
             name = filename if filename else "new_file.txt"
             res = create_file(output_dir, name, content if content else "")
             file_data = {"name": name, "content": content if content else ""}
+            res = f"Created: {os.path.join(output_dir, name)}"
         elif intent == "create_folder":
             name = filename if filename else "new_folder"
             res = create_folder(output_dir, name)
@@ -117,6 +123,7 @@ class LocalAIAgent:
             name = filename if filename else "code.py"
             res = write_code(output_dir, name, content)
             file_data = {"name": name, "content": content}
+            res = f"Updated: {os.path.join(output_dir, name)}"
         elif intent == "summarize":
             res = self._chat([{'role': 'user', 'content': f"Summarize: {content}"}])
         elif intent == "clarify":
