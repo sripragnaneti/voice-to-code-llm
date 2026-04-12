@@ -167,6 +167,61 @@ else:
     st.session_state.output_dir = os.path.join(st.session_state.base_output_dir, safe_thread)
     os.makedirs(st.session_state.output_dir, exist_ok=True)
 
+    # ── Input Methods (Top Tier) ──
+    st.markdown('<div class="label-text" style="margin-top: -10px;">⚡ Multimodal Input Pipeline</div>', unsafe_allow_html=True)
+    col_code, col_file, col_sum = st.columns(3)
+    
+    # 1. LIVE CODE COMMAND
+    with col_code:
+        st.markdown('<div class="label-text">🎤 Record Code Command</div>', unsafe_allow_html=True)
+        audio_code = st.audio_input("Code Mic", label_visibility="collapsed", key=f"mic_code_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
+        if audio_code:
+            curr_h = hash(audio_code.getvalue())
+            if curr_h != st.session_state.last_audio_hash:
+                buf_p = os.path.join(".audio_cache", f"mic_{st.session_state.active_thread}.wav")
+                with open(buf_p, 'wb') as f: f.write(audio_code.getbuffer())
+                with st.spinner("Extracting logic..."):
+                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_p)
+                    if t.startswith("LANG_ERR"): st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                    else: append_to_input(t)
+                    st.session_state.last_audio_hash = curr_h
+                st.rerun()
+
+    # 2. UPLOAD LOGIC SOURCE
+    with col_file:
+        st.markdown('<div class="label-text">📁 Upload Audio Source</div>', unsafe_allow_html=True)
+        up = st.file_uploader("Audio Upload", type=["wav", "mp3"], label_visibility="collapsed", key=f"up_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
+        if up:
+            curr_f_h = hash(up.getvalue())
+            if curr_f_h != st.session_state.last_file_hash:
+                up_p = os.path.join(".audio_cache", f"up_{st.session_state.active_thread}.wav")
+                with open(up_p, "wb") as f: f.write(up.getbuffer())
+                with st.spinner("Processing logic file..."):
+                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(up_p)
+                    if t.startswith("LANG_ERR"): st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                    else: append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{t}\n--- END SOURCE ---")
+                    st.session_state.last_file_hash = curr_f_h
+                st.rerun()
+
+    # 3. LIVE SUMMARIZE Command
+    with col_sum:
+        st.markdown('<div class="label-text">📝 Record Summarize</div>', unsafe_allow_html=True)
+        audio_summ = st.audio_input("Summ Mic", label_visibility="collapsed", key=f"mic_sum_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
+        if audio_summ:
+            curr_s_h = hash(audio_summ.getvalue())
+            if curr_s_h != st.session_state.get('last_sum_hash'):
+                buf_p = os.path.join(".audio_cache", f"sum_{st.session_state.active_thread}.wav")
+                with open(buf_p, 'wb') as f: f.write(audio_summ.getbuffer())
+                with st.spinner("Drafting summary..."):
+                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_p)
+                    if t.startswith("LANG_ERR"): st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
+                    else:
+                        append_to_input(f"Summarize this concisely: {t}")
+                        st.session_state.run_trigger = True
+                    st.session_state.last_sum_hash = curr_s_h
+                st.rerun()
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # ── Sidebar ──
     with st.sidebar:
         st.markdown("### 🎙️ Aura")
@@ -371,65 +426,7 @@ else:
                 </script>
             """, height=0)
 
-        col_code, col_file, col_sum = st.columns(3)
-        
-        # 1. LIVE CODE COMMAND
-        with col_code:
-            st.markdown('<div class="label-text">🎤 Record Code Command</div>', unsafe_allow_html=True)
-            audio_code = st.audio_input("Code Mic", label_visibility="collapsed", key=f"mic_code_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
 
-            if audio_code:
-                current_hash = hash(audio_code.getvalue())
-                if current_hash != st.session_state.last_audio_hash:
-                    buf_path = os.path.join(".audio_cache", f"mic_{st.session_state.active_thread}.wav")
-                    with open(buf_path, 'wb') as f: f.write(audio_code.getbuffer())
-                    with st.spinner("Extracting logic..."):
-                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_path)
-                        if t.startswith("LANG_ERR"):
-                            st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
-                        else:
-                            append_to_input(t)
-                        st.session_state.last_audio_hash = current_hash
-                    st.rerun()
-
-        # 2. UPLOAD LOGIC SOURCE
-        with col_file:
-            st.markdown('<div class="label-text">📁 Upload Audio Source</div>', unsafe_allow_html=True)
-            up = st.file_uploader("Audio Upload", type=["wav", "mp3"], label_visibility="collapsed", key=f"up_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
-            
-            if up:
-                current_file_hash = hash(up.getvalue())
-                if current_file_hash != st.session_state.last_file_hash:
-                    up_path = os.path.join(".audio_cache", f"up_{st.session_state.active_thread}.wav")
-                    with open(up_path, "wb") as f: f.write(up.getbuffer())
-                    with st.spinner("Processing logic file..."):
-                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(up_path)
-                        if t.startswith("LANG_ERR"):
-                            st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
-                        else:
-                            append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{t}\n--- END SOURCE ---")
-                        st.session_state.last_file_hash = current_file_hash
-                    st.rerun()
-
-        # 3. LIVE SUMMARIZE Command
-        with col_sum:
-            st.markdown('<div class="label-text">📝 Record Summarize</div>', unsafe_allow_html=True)
-            audio_summ = st.audio_input("Summ Mic", label_visibility="collapsed", key=f"mic_sum_{st.session_state.active_thread}_{st.session_state.expander_pulse}")
-            
-            if audio_summ:
-                current_sum_hash = hash(audio_summ.getvalue())
-                if current_sum_hash != st.session_state.get('last_sum_hash'):
-                    buf_path = os.path.join(".audio_cache", f"sum_{st.session_state.active_thread}.wav")
-                    with open(buf_path, 'wb') as f: f.write(audio_summ.getbuffer())
-                    with st.spinner("Drafting summary..."):
-                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_path)
-                        if t.startswith("LANG_ERR"):
-                            st.warning(f"⚠️ {t.replace('LANG_ERR: ', '')}")
-                        else:
-                            append_to_input(f"Summarize this concisely: {t}")
-                            st.session_state.run_trigger = True
-                        st.session_state.last_sum_hash = current_sum_hash
-                    st.rerun()
 
     # ── Header ──
     st.markdown(f"### 💬 {st.session_state.active_thread}")
