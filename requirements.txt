@@ -1,0 +1,8 @@
+streamlit
+openai-whisper
+ollama
+openai
+groq
+sounddevice
+scipy
+python-dotenv
