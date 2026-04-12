@@ -81,16 +81,20 @@ def load_chats():
     if os.path.exists(CHATS_FILE):
         try:
             with open(CHATS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Migration logic for existing list-based threads
+                for k, v in data.items():
+                    if isinstance(v, list):
+                        data[k] = {"messages": v, "model": "llama3.2"}
+                return data
         except Exception: pass
-    return {"General": []}
+    return {"General": {"messages": [], "model": "llama3.2"}}
 
 def save_chats(threads):
     with open(CHATS_FILE, "w", encoding="utf-8") as f:
         json.dump(threads, f, indent=2)
 
 if 'setup_complete' not in st.session_state: st.session_state.setup_complete = False
-if 'model_name' not in st.session_state: st.session_state.model_name = ""
 if 'mode' not in st.session_state: st.session_state.mode = "local"
 if 'base_output_dir' not in st.session_state: st.session_state.base_output_dir = os.path.join(os.getcwd(), "output")
 if 'run_trigger' not in st.session_state: st.session_state.run_trigger = False
@@ -99,6 +103,7 @@ if 'open_sidebar_file' not in st.session_state: st.session_state.open_sidebar_fi
 if 'last_audio_hash' not in st.session_state: st.session_state.last_audio_hash = None
 if 'last_file_hash' not in st.session_state: st.session_state.last_file_hash = None
 if 'last_doc_hash' not in st.session_state: st.session_state.last_doc_hash = None
+if 'expander_pulse' not in st.session_state: st.session_state.expander_pulse = 0
 if 'threads' not in st.session_state: st.session_state.threads = load_chats()
 if 'active_thread' not in st.session_state:
     st.session_state.active_thread = list(st.session_state.threads.keys())[0] if st.session_state.threads else "General"
@@ -164,9 +169,10 @@ if not st.session_state.setup_complete:
         if not is_local and not st.session_state.available_apis: disable_launch = True
 
         if st.button("🚀 Launch Aura", use_container_width=True, type="primary", disabled=disable_launch):
-            st.session_state.model_name = sel_model
+            st.session_state.threads[st.session_state.active_thread]['model'] = sel_model
             st.session_state.output_dir = os.path.join(os.getcwd(), "output")
             st.session_state.setup_complete = True
+            save_chats(st.session_state.threads)
             st.rerun()
 
 
@@ -184,20 +190,23 @@ else:
     with st.sidebar:
         st.markdown("### 🎙️ Aura")
         mode_label = "🖥️ Local Model" if st.session_state.mode == "local" else "🌐 Global API"
+        current_model = st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')
         
         if st.session_state.mode == "local":
             avail = check_ollama_models()
-            idx = avail.index(st.session_state.model_name) if st.session_state.model_name in avail else 0
+            idx = avail.index(current_model) if current_model in avail else 0
             new_mod = st.selectbox(mode_label, avail, index=idx, label_visibility="collapsed")
-            if new_mod and new_mod != st.session_state.model_name:
-                st.session_state.model_name = new_mod
+            if new_mod and new_mod != current_model:
+                st.session_state.threads[st.session_state.active_thread]['model'] = new_mod
+                save_chats(st.session_state.threads)
                 st.rerun()
         else:
             avail = [a.upper() for a in st.session_state.available_apis]
-            idx = avail.index(st.session_state.model_name.upper()) if st.session_state.model_name.upper() in avail else 0
+            idx = avail.index(current_model.upper()) if current_model.upper() in avail else 0
             new_mod = st.selectbox(mode_label, avail, index=idx, label_visibility="collapsed")
-            if new_mod and new_mod.lower() != st.session_state.model_name:
-                st.session_state.model_name = new_mod.lower()
+            if new_mod and new_mod.lower() != current_model:
+                st.session_state.threads[st.session_state.active_thread]['model'] = new_mod.lower()
+                save_chats(st.session_state.threads)
                 st.rerun()
 
         st.markdown("---")
@@ -210,7 +219,7 @@ else:
         st.markdown("**Threads**")
         if st.button("＋ New thread", use_container_width=True):
             new_id = f"New Chat {len(st.session_state.threads) + 1}"
-            st.session_state.threads[new_id] = []
+            st.session_state.threads[new_id] = {"messages": [], "model": "llama3.2"}
             st.session_state.active_thread = new_id
             st.session_state.pending_text = ""
             st.session_state.last_audio_hash = None
@@ -230,7 +239,7 @@ else:
                     st.rerun()
             with col2:
                 if st.button("🧹", key=f"clr_{t_id}", help="Clear chat"):
-                    st.session_state.threads[t_id] = []
+                    st.session_state.threads[t_id]['messages'] = []
                     save_chats(st.session_state.threads)
                     clr_dir = os.path.join(st.session_state.base_output_dir, re.sub(r'[\\/*?:"<>|.]', "", t_id).strip())
                     if os.path.exists(clr_dir): shutil.rmtree(clr_dir, ignore_errors=True)
@@ -285,6 +294,12 @@ else:
         for f in files:
             fp = os.path.join(st.session_state.output_dir, f)
             is_expanded = (st.session_state.open_sidebar_file == f)
+            
+            # Use dynamic keys to force expansion reset on button click
+            exp_key = f"exp_{f}_{st.session_state.expander_pulse}"
+            
+            # Wrap in a div with an ID for auto-scrolling
+            st.markdown(f'<div id="file-anchor-{f}"></div>', unsafe_allow_html=True)
             with st.expander(f"📄 {f}", expanded=is_expanded):
                 col_r, col_df = st.columns([5, 1])
                 with col_r:
@@ -311,6 +326,11 @@ else:
             dp = os.path.join(st.session_state.output_dir, d)
             subfiles = [f for f in os.listdir(dp) if os.path.isfile(os.path.join(dp, f))]
             folder_expanded = (st.session_state.open_sidebar_file in subfiles)
+            
+            exp_key_f = f"exp_fold_{d}_{st.session_state.expander_pulse}"
+            
+            # Wrap in a div with an ID for auto-scrolling
+            st.markdown(f'<div id="folder-anchor-{d}"></div>', unsafe_allow_html=True)
             with st.expander(f"📁 {d} ({len(subfiles)})", expanded=folder_expanded):
                 c_rn, c_del = st.columns([5,1])
                 with c_rn:
@@ -357,6 +377,19 @@ else:
                         st.code(sc, language="python" if sf.endswith(".py") else None)
                     st.markdown("---")
 
+        # ── Auto-Scroll Snipe Logic ──
+        if st.session_state.open_sidebar_file:
+            target = st.session_state.open_sidebar_file
+            st.components.v1.html(f"""
+                <script>
+                const targetId = 'file-anchor-{target}';
+                const el = window.parent.document.getElementById(targetId);
+                if (el) {{
+                    el.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
+                }}
+                </script>
+            """, height=0)
+
     # ── Header ──
     st.markdown(f"### 💬 {st.session_state.active_thread}")
 
@@ -371,47 +404,34 @@ else:
         else:
             st.session_state[input_key] = text
 
-    col_mic, col_file, col_doc = st.columns(3)
+    col_mic, col_file = st.columns(2)
 
     with col_mic:
         try:
-            audio_bytes = st.audio_input("🎤 Record command manually")
-            if audio_bytes:
-                current_audio_hash = hash(audio_bytes.getvalue())
-                if current_audio_hash != st.session_state.last_audio_hash:
-                    with open('r.wav', 'wb') as f: f.write(audio_bytes.getbuffer())
-                    with st.spinner("Extracting voice..."):
-                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.model_name).transcribe('r.wav')
+            # Code-focused microphone isolation
+            audio_code = st.audio_input("🎤 Record Code Command", key=f"mic_code_{st.session_state.active_thread}")
+            if audio_code:
+                current_hash = hash(audio_code.getvalue())
+                if current_hash != st.session_state.last_audio_hash:
+                    with open('r.wav', 'wb') as f: f.write(audio_code.getbuffer())
+                    with st.spinner("Extracting logic..."):
+                        t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe('r.wav')
                         append_to_input(t)
-                        st.session_state.last_audio_hash = current_audio_hash
+                        st.session_state.last_audio_hash = current_hash
                     st.rerun()
         except AttributeError:
             st.warning("Update Streamlit to use native Audio UI.")
 
     with col_file:
-        up = st.file_uploader("📁 Translate audio file", type=["wav", "mp3"])
+        up = st.file_uploader("📁 Upload Audio Logic", type=["wav", "mp3"], key=f"uploader_{st.session_state.active_thread}")
         if up:
             current_file_hash = hash(up.getvalue())
             if current_file_hash != st.session_state.last_file_hash:
                 with open("t.wav", "wb") as f: f.write(up.getbuffer())
-                with st.spinner("Extracting audio..."):
-                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.model_name).transcribe('t.wav')
-                    append_to_input(t)
+                with st.spinner("Processing logic file..."):
+                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe('t.wav')
+                    append_to_input(f"--- ATTACHED LOGIC SOURCE ---\n{t}\n--- END SOURCE ---")
                     st.session_state.last_file_hash = current_file_hash
-                st.rerun()
-                
-    with col_doc:
-        doc = st.file_uploader("📄 Upload text/code doc", type=["txt", "md", "py", "java", "json", "csv", "html", "js"])
-        if doc:
-            doc_hash = hash(doc.getvalue())
-            if st.session_state.last_doc_hash != doc_hash:
-                with st.spinner("Extracting text..."):
-                    try:
-                        extracted = doc.getvalue().decode('utf-8')
-                        append_to_input(f"```\n{extracted}\n```")
-                        st.session_state.last_doc_hash = doc_hash
-                    except Exception:
-                        st.error("Failed to read document text.")
                 st.rerun()
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -437,10 +457,13 @@ else:
 
     # ── Chat History ──
     if st.session_state.active_thread not in st.session_state.threads:
-        st.session_state.threads[st.session_state.active_thread] = []
+        st.session_state.threads[st.session_state.active_thread] = {"messages": [], "model": "llama3.2"}
         save_chats(st.session_state.threads)
         
-    history = st.session_state.threads[st.session_state.active_thread]
+    thread_data = st.session_state.threads[st.session_state.active_thread]
+    history = thread_data['messages']
+    current_thread_model = thread_data.get('model', 'llama3.2')
+    
     with st.container(height=450):
         if not history:
             st.markdown('<div class="empty-state">No messages yet.<br>Type a command above to begin.</div>', unsafe_allow_html=True)
@@ -462,6 +485,7 @@ else:
                     
                     if st.button(f"🔍 Show '{fd['name']}' in Sidebar Explorer", key=f"btn_open_{idx}"):
                         st.session_state.open_sidebar_file = fd['name']
+                        st.session_state.expander_pulse += 1 # Force rotate expander IDs
                         st.rerun()
                 else:
                     action_txt = "Processed text summary via LLM." if intent_val == "SUMMARIZE" else "Generated conversational text response based on context."
@@ -474,19 +498,19 @@ else:
     if st.session_state.run_trigger:
         try:
             with st.status("Processing…", expanded=True) as status:
-                agent = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.model_name)
+                agent = LocalAIAgent(mode=st.session_state.mode, model_name=current_thread_model)
                 start_t = time.time()
                 res = agent.execute(st.session_state.last_transcription, st.session_state.output_dir, history)
                 elapsed = round(time.time() - start_t, 2)
                 is_first_msg = len(history) == 0
                 
                 # Append user msg
-                st.session_state.threads[st.session_state.active_thread].append(
+                st.session_state.threads[st.session_state.active_thread]['messages'].append(
                     {"role": "user", "content": st.session_state.last_transcription}
                 )
                 
                 # Append bot msg with potential file_data and intent
-                st.session_state.threads[st.session_state.active_thread].append(
+                st.session_state.threads[st.session_state.active_thread]['messages'].append(
                     {
                         "role": "assistant", 
                         "content": res["result"], 
