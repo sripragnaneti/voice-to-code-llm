@@ -410,7 +410,7 @@ else:
         st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
         is_error = "❌" in f_cmd
         
-        # Callback Placeholder():
+        def handle_submit():
             val = st.session_state[input_key]
             if val.strip() and not ("❌" in val):
                 st.session_state.last_transcription = val
