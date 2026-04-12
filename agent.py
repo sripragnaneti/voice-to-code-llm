@@ -49,8 +49,9 @@ class LocalAIAgent:
         result = self.stt_model.transcribe(audio_path)
         lang = result.get("language", "en")
         
-        if lang != "en":
-            return f"❌ Non-English audio detected ({lang}). Please speak in English, as phonetic sound-mapping has been disabled."
+        # Explicitly allow English and French
+        if lang not in ["en", "fr"]:
+            return f"❌ Unsupported language detected ({lang}). Please speak in English or French."
             
         return result["text"]
 
@@ -75,12 +76,14 @@ class LocalAIAgent:
 
     def get_intent_and_refine(self, prompt, history=[]):
         system_prompt = """
-        You are an Intent Classifier and Code Generator with MEMORY.
+        You are 'Aura', a highly advanced Bilingual AI coding assistant fluent in English and French.
+        You MUST detect the user's language and respond in the SAME language.
+        
         FORMAT: return ONLY JSON: {"intent": "create_file|write_code|create_folder|summarize|chat|clarify", "filename": "...", "content": "..."}
         
         CRUCIAL RULE (TRANSCRIPTION ERROR DETECTION):
-        If the prompt contains obvious phonetic transcription errors, gibberish verbs, or lacks logical meaning (e.g., "create a paintome" instead of "palindrome"), DO NOT blindly generate code.
-        Set "intent" to "clarify" and use "content" to explicitly ask the user for confirmation (e.g., "Did you mean a 'palindrome' program?").
+        If the prompt contains obvious phonetic transcription errors or lacks logical meaning (in English or French), DO NOT blindly generate code.
+        Set "intent" to "clarify" and ask the user for confirmation in THEIR language.
         """
         messages = [{'role': 'system', 'content': system_prompt}]
         for msg in history:
