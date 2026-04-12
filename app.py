@@ -357,7 +357,7 @@ else:
         else:
             st.session_state[input_key] = text
 
-    col_mic, col_file, col_temp = st.columns(2)
+    col_mic, col_file, col_doc = st.columns(3)
 
     with col_mic:
         try:
@@ -410,7 +410,7 @@ else:
         st.markdown("<div style='height: 28px'></div>", unsafe_allow_html=True)
         is_error = "❌" in f_cmd
         
-        def handle_submit():
+        # Callback Placeholder():
             val = st.session_state[input_key]
             if val.strip() and not ("❌" in val):
                 st.session_state.last_transcription = val
