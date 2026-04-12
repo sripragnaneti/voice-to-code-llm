@@ -445,9 +445,6 @@ else:
         else:
             st.session_state[input_key] = text
 
-                    st.session_state.last_file_hash = current_file_hash
-                st.rerun()
-
     st.markdown("<br>", unsafe_allow_html=True)
     
     col_input, col_btn = st.columns([8, 1])
