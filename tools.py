@@ -36,3 +36,5 @@ def write_code(directory, filename, code):
 def list_files(directory):
     ensure_dir(directory)
     return os.listdir(directory)
+
+# Hotfix applied
