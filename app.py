@@ -1,7 +1,7 @@
 import streamlit as st
 import os, shutil, re, json, time, threading
 from agent import LocalAIAgent
-from tools import list_files
+from tools import list_files, verify_code
 from config_utils import get_available_apis, check_ollama_models, has_local_models
 
 # --- Page Config ---
@@ -68,7 +68,19 @@ st.markdown("""
         padding: 6rem 2rem;
         font-size: 1rem;
     }
+    .main-header {
+        font-size: 2.2rem;
+        font-weight: 700;
+        background: linear-gradient(90deg, #f8fafc, #7c3aed);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 2rem;
+    }
     .block-container { padding-top: 2rem !important; }
+    /* Hide the 200MB limit text from file uploader */
+    [data-testid="stFileUploadDropzoneInstructions"] small {
+        display: none !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -107,8 +119,25 @@ if 'expander_pulse' not in st.session_state: st.session_state.expander_pulse = 0
 if 'threads' not in st.session_state: st.session_state.threads = load_chats()
 if 'active_thread' not in st.session_state:
     st.session_state.active_thread = list(st.session_state.threads.keys())[0] if st.session_state.threads else "General"
+if 'last_transcription' not in st.session_state: st.session_state.last_transcription = ""
+if 'last_sum_hash' not in st.session_state: st.session_state.last_sum_hash = None
 if 'available_apis' not in st.session_state: st.session_state.available_apis = get_available_apis()
 if 'available_local_models' not in st.session_state: st.session_state.available_local_models = check_ollama_models()
+if 'user_waits' not in st.session_state: st.session_state.user_waits = False
+if 'agent_thread' not in st.session_state: st.session_state.agent_thread = None
+if 'agent_start_time' not in st.session_state: st.session_state.agent_start_time = None
+if 'agent_res' not in st.session_state: st.session_state.agent_res = {"data": None, "error": None}
+if 'fallback_triggered' not in st.session_state: st.session_state.fallback_triggered = False
+if 'agent' not in st.session_state:
+    st.session_state.agent = None
+
+def get_agent():
+    model = st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')
+    if st.session_state.agent is None or \
+       st.session_state.agent.mode != st.session_state.mode or \
+       st.session_state.agent.model_name != model:
+        st.session_state.agent = LocalAIAgent(mode=st.session_state.mode, model_name=model)
+    return st.session_state.agent
 
 
 # ═══════════════════════════════════════════════
@@ -121,32 +150,40 @@ if not st.session_state.setup_complete:
     with center:
         st.markdown("")
         st.markdown('<div class="aura-title">🎙️ Aura</div>', unsafe_allow_html=True)
-        st.markdown('<div class="aura-subtitle">Trilingual Voice-to-Code Platform</div>', unsafe_allow_html=True)
+        st.markdown('<div class="aura-subtitle">AI-Powered Voice-to-Code Platform</div>', unsafe_allow_html=True)
 
         st.markdown("---")
-        st.markdown("### 🖥️ Local Workbench")
+        st.markdown("### ⚙️ Intelligence Engine")
         
-        if st.session_state.available_local_models:
-            sel_model = st.selectbox("Select Your Primary Local Engine", st.session_state.available_local_models)
+        provider_type = st.radio("Primary Model Source", ["🖥️ Local (Ollama)", "🌐 Global (Groq API)"], horizontal=True)
+        
+        if provider_type == "🖥️ Local (Ollama)":
+            if st.session_state.available_local_models:
+                sel_model = st.selectbox("Select Your Local Engine", st.session_state.available_local_models)
+            else:
+                st.error("❌ Ollama not found. Please ensure Ollama is running.")
+                if st.button("🔄 Refresh Local Models"):
+                    st.session_state.available_local_models = check_ollama_models()
+                    st.rerun()
+                st.stop()
         else:
-            st.error("❌ Ollama not found. Please ensure Ollama is running.")
-            if st.button("🔄 Refresh Local Models"):
-                st.session_state.available_local_models = check_ollama_models()
-                st.rerun()
-            st.stop()
+            if "groq" in st.session_state.available_apis:
+                st.info("✅ Groq API detected. Aura will use the High-Speed Global Engine.")
+                sel_model = "llama-3.3-70b-versatile" # Locked to the fastest Groq model
+            else:
+                st.error("❌ Groq API Key not found in .env. Please configure it to use Global Mode.")
+                st.stop()
             
         st.markdown("---")
         
-        with st.expander("⚙️ Advanced Workspace Optimization"):
+        with st.expander("🛠️ Advanced Workspace Optimization"):
             st.session_state.base_output_dir = st.text_input("Local Project Workspace", value=st.session_state.base_output_dir)
-            # Latency fallback threshold
             if 'latency_threshold' not in st.session_state: st.session_state.latency_threshold = 15
-            st.session_state.latency_threshold = st.slider("Latency Fallback Threshold (Seconds)", 5, 60, st.session_state.latency_threshold, help="Switch suggestion triggered after this time")
+            st.session_state.latency_threshold = st.slider("Latency Fallback Threshold (Seconds)", 5, 60, st.session_state.latency_threshold)
 
         if st.button("🚀 Launch Aura", use_container_width=True, type="primary"):
             st.session_state.threads[st.session_state.active_thread]['model'] = sel_model
-            st.session_state.mode = "local" # Strictly local on launch
-            st.session_state.output_dir = os.path.join(os.getcwd(), "output")
+            st.session_state.mode = "local" if provider_type == "🖥️ Local (Ollama)" else "global"
             st.session_state.setup_complete = True
             save_chats(st.session_state.threads)
             st.rerun()
@@ -167,15 +204,19 @@ else:
     st.session_state.output_dir = os.path.join(st.session_state.base_output_dir, safe_thread)
     os.makedirs(st.session_state.output_dir, exist_ok=True)
 
+    # ── Input Bar State ──
+    input_key = f"cmd_input_{st.session_state.active_thread}"
+    if input_key not in st.session_state:
+        st.session_state[input_key] = ""
+
+    def append_to_input(text):
+        if st.session_state[input_key].strip():
+            st.session_state[input_key] += f"\n\n{text}"
+        else:
+            st.session_state[input_key] = text
+
     # ── Dashboard UI ──
     st.markdown('<div class="main-header">🌌 Aura Orchestrator Dashboard</div>', unsafe_allow_html=True)
-    
-    # Sidebar/Mic Integration Helper
-    def append_to_input(t):
-        st.session_state.last_transcription = t
-        st.session_state.run_trigger = True
-
-    # High-Resolution Multimodal Input Grid (Top Aligned)
     st.markdown('<div class="label-text" style="margin-top: -10px;">⚡ Multimodal Input Pipeline</div>', unsafe_allow_html=True)
     col_code, col_file, col_sum = st.columns(3)
     
@@ -189,7 +230,8 @@ else:
                 buf_p = os.path.join(".audio_cache", f"mic_{st.session_state.active_thread}.wav")
                 with open(buf_p, 'wb') as f: f.write(audio_code.getbuffer())
                 with st.spinner("Extracting logic..."):
-                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_p)
+                    agent = get_agent()
+                    t = agent.transcribe(buf_p)
                     if t.startswith("LANG_ERR"): 
                         st.error(f"⚠️ {t.replace('LANG_ERR: ', '')}")
                     elif t.startswith("LANG_WARN"):
@@ -208,10 +250,12 @@ else:
         if up:
             curr_f_h = hash(up.getvalue())
             if curr_f_h != st.session_state.last_file_hash:
-                up_p = os.path.join(".audio_cache", f"up_{st.session_state.active_thread}.wav")
+                ext = os.path.splitext(up.name)[1]
+                up_p = os.path.join(".audio_cache", f"up_{st.session_state.active_thread}{ext}")
                 with open(up_p, "wb") as f: f.write(up.getbuffer())
                 with st.spinner("Processing logic file..."):
-                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(up_p)
+                    agent = get_agent()
+                    t = agent.transcribe(up_p)
                     if t.startswith("LANG_ERR"): 
                         st.error(f"⚠️ {t.replace('LANG_ERR: ', '')}")
                     elif t.startswith("LANG_WARN"):
@@ -233,16 +277,19 @@ else:
                 buf_p = os.path.join(".audio_cache", f"sum_{st.session_state.active_thread}.wav")
                 with open(buf_p, 'wb') as f: f.write(audio_summ.getbuffer())
                 with st.spinner("Drafting summary..."):
-                    t = LocalAIAgent(mode=st.session_state.mode, model_name=st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')).transcribe(buf_p)
+                    agent = get_agent()
+                    t = agent.transcribe(buf_p)
                     if t.startswith("LANG_ERR"): 
                         st.error(f"⚠️ {t.replace('LANG_ERR: ', '')}")
                     elif t.startswith("LANG_WARN"):
                         clean_t = t.replace("LANG_WARN: ", "")
                         st.toast("💡 Low confidence summary. Drafting...", icon="⚠️")
                         append_to_input(f"Summarize this concisely: {clean_t}")
+                        st.session_state.last_transcription = st.session_state[input_key]
                         st.session_state.run_trigger = True
                     else:
                         append_to_input(f"Summarize this concisely: {t}")
+                        st.session_state.last_transcription = st.session_state[input_key]
                         st.session_state.run_trigger = True
                     st.session_state.last_sum_hash = curr_s_h
                 st.rerun()
@@ -251,6 +298,11 @@ else:
     # ── Sidebar ──
     with st.sidebar:
         st.markdown("### 🎙️ Aura")
+        # Global/Local Toggle
+        new_mode = st.selectbox("Intelligence Mode", ["🖥️ Local", "🌐 Global"], 
+                               index=0 if st.session_state.mode == "local" else 1)
+        st.session_state.mode = "local" if "Local" in new_mode else "global"
+        
         mode_label = "🖥️ Local Model" if st.session_state.mode == "local" else "🌐 Global API"
         current_model = st.session_state.threads[st.session_state.active_thread].get('model', 'llama3.2')
         
@@ -263,11 +315,11 @@ else:
                 save_chats(st.session_state.threads)
                 st.rerun()
         else:
-            avail = [a.upper() for a in st.session_state.available_apis]
-            idx = avail.index(current_model.upper()) if current_model.upper() in avail else 0
-            new_mod = st.selectbox(mode_label, avail, index=idx, label_visibility="collapsed")
-            if new_mod and new_mod.lower() != current_model:
-                st.session_state.threads[st.session_state.active_thread]['model'] = new_mod.lower()
+            st.success("🌐 Groq Engine Active")
+            # Force the thread model to Groq flagship if switching into Global mode
+            target_global = "llama-3.3-70b-versatile"
+            if current_model != target_global:
+                st.session_state.threads[st.session_state.active_thread]['model'] = target_global
                 save_chats(st.session_state.threads)
                 st.rerun()
 
@@ -377,6 +429,11 @@ else:
                 with open(fp, "r", encoding="utf-8") as file_: c = file_.read()
                 st.download_button("Download", data=c, file_name=f, key=f"dl_{f}")
                 st.code(c, language="python" if f.endswith(".py") else None)
+                if st.button("✅ Verify Syntax", key=f"verify_{f}"):
+                    success, msg = verify_code(fp)
+                    if success is True: st.success(msg)
+                    elif success is False: st.error(msg)
+                    else: st.warning(msg)
                 if folders:
                     target_dir = st.selectbox("Move into folder...", ["-- Select --"] + folders, key=f"mv_{f}")
                     if target_dir != "-- Select --":
@@ -437,6 +494,11 @@ else:
                     show_code = st.checkbox(f"👁️ View file code", value=is_active, key=f"view_{d}_{sf}")
                     if show_code: 
                         st.code(sc, language="python" if sf.endswith(".py") else None)
+                    if st.button("✅ Verify Syntax", key=f"verify_{d}_{sf}"):
+                        success, msg = verify_code(sfp)
+                        if success is True: st.success(msg)
+                        elif success is False: st.error(msg)
+                        else: st.warning(msg)
                     st.markdown("---")
 
         # ── Auto-Scroll Snipe Logic ──
@@ -457,16 +519,6 @@ else:
     # ── Header ──
     st.markdown(f"### 💬 {st.session_state.active_thread}")
 
-    # ── Input Bar ──
-    input_key = f"cmd_input_{st.session_state.active_thread}"
-    if input_key not in st.session_state:
-        st.session_state[input_key] = ""
-
-    def append_to_input(text):
-        if st.session_state[input_key].strip():
-            st.session_state[input_key] += f"\n\n{text}"
-        else:
-            st.session_state[input_key] = text
 
     st.markdown("<br>", unsafe_allow_html=True)
     
@@ -522,7 +574,13 @@ else:
                         st.session_state.expander_pulse += 1 # Force rotate expander IDs
                         st.rerun()
                 else:
-                    action_txt = "Processed text summary via LLM." if intent_val == "SUMMARIZE" else "Generated conversational text response based on context."
+                    if intent_val == "SUMMARIZE":
+                        action_txt = "Processed text summary via LLM."
+                    elif intent_val == "CLARIFY":
+                        action_txt = "Detected potential transcription error; requested clarification."
+                    else:
+                        action_txt = "Generated conversational text response based on context."
+                        
                     st.markdown(f'<b>⚙️ Action Taken:</b> {action_txt}<br>', unsafe_allow_html=True)
                     st.markdown(f'<b>✅ Final Output:</b><br>{msg["content"]}</div>', unsafe_allow_html=True)
                 
@@ -531,10 +589,11 @@ else:
     # ── Agent Execution ──
     if st.session_state.run_trigger:
         try:
-            with st.status("🚀 Aura is thinking...", expanded=True) as status:
-                start_t = time.time()
-                is_first_msg = len(history) == 0
-                res_container = {"data": None, "error": None}
+            # Persistent Thread Management
+            if st.session_state.agent_thread is None or not st.session_state.agent_thread.is_alive():
+                st.session_state.agent_start_time = time.time()
+                st.session_state.fallback_triggered = False
+                st.session_state.user_waits = False
                 
                 # Capture state for thread-safety
                 smode = st.session_state.mode
@@ -542,48 +601,72 @@ else:
                 strans = st.session_state.last_transcription
                 sout = st.session_state.output_dir
                 shist = history
-                sthreshold = st.session_state.latency_threshold
-
-                def run_agent():
-                    try:
-                        agent = LocalAIAgent(mode=smode, model_name=smodel)
-                        res_container["data"] = agent.execute(strans, sout, shist)
-                    except Exception as e: res_container["error"] = str(e)
-
-                t = threading.Thread(target=run_agent)
-                t.start()
                 
+                # Use a thread-safe local container
+                # We store this in session_state so it survives reruns
+                st.session_state.agent_res = {"data": None, "error": None}
+                res_ref = st.session_state.agent_res
+
+                def run_agent(container, agent_obj):
+                    try:
+                        container["data"] = agent_obj.execute(strans, sout, shist)
+                    except Exception as e: 
+                        container["error"] = str(e)
+
+                st.session_state.agent_thread = threading.Thread(target=run_agent, args=(res_ref, get_agent()))
+                st.session_state.agent_thread.start()
+
+            t = st.session_state.agent_thread
+            start_t = st.session_state.agent_start_time
+            res_container = st.session_state.agent_res
+            sthreshold = st.session_state.latency_threshold
+
+            with st.status("🚀 Aura is thinking...", expanded=True) as status:
                 timer_p = st.empty()
-                fallback_trig = False
+                fallback_p = st.empty()
+                
+                fallback_rendered = False
                 while t.is_alive():
                     elap = time.time() - start_t
                     timer_p.markdown(f"⏱️ **Elapsed:** {elap:.1f}s / {sthreshold}s")
-                    if elap > sthreshold and not fallback_trig:
-                        fallback_trig = True
-                        st.warning("⚠️ Local engine is running slow.")
-                        if st.session_state.get('available_apis'):
-                            if st.button("🚀 Switch to Global (Groq) for Instant Result?", key="fallback_btn"):
-                                st.session_state.mode = "global"
-                                st.session_state.threads[st.session_state.active_thread]['model'] = "groq"
-                                st.rerun()
+                    
+                    if elap > sthreshold and not st.session_state.user_waits and not fallback_rendered:
+                        fallback_rendered = True
+                        with fallback_p.container():
+                            st.warning("⚠️ Local engine is running slow.")
+                            st.write("Would you like to continue with the local model or switch to Groq for an instant response?")
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.button("⏳ Continue with Local", key="wait_btn"):
+                                    st.session_state.user_waits = True
+                                    st.rerun()
+                            with col2:
+                                if st.button("🚀 Switch to Groq (Global)", key="fallback_btn"):
+                                    st.session_state.mode = "global"
+                                    # Set to Groq model
+                                    st.session_state.threads[st.session_state.active_thread]['model'] = "llama-3.3-70b-versatile"
+                                    st.session_state.agent_thread = None # Reset thread to let it restart in global mode
+                                    st.rerun()
                     time.sleep(0.1)
+                
                 t.join()
                 
-                if res_container["error"]:
+                if res_container.get("error"):
                     st.error(f"Error: {res_container['error']}")
-                    res = {"result": "Execution failed.", "intent": "chat"}
-                else:
+                    res = {"result": "Execution failed. Please try again or check your API key.", "intent": "CHAT"}
+                elif res_container.get("data"):
                     res = res_container["data"]
+                else:
+                    res = {"result": "No response received from agent.", "intent": "CHAT"}
                 
                 elapsed = round(time.time() - start_t, 2)
-                is_first_msg = len(history) == 0
                 
                 # Append user msg
                 st.session_state.threads[st.session_state.active_thread]['messages'].append(
                     {"role": "user", "content": st.session_state.last_transcription}
                 )
                 
-                # Append bot msg with potential file_data and intent
+                # Append bot msg
                 st.session_state.threads[st.session_state.active_thread]['messages'].append(
                     {
                         "role": "assistant", 
@@ -594,11 +677,12 @@ else:
                     }
                 )
                 
-                # Auto-name thread based on first prompt
-                if is_first_msg and st.session_state.active_thread.startswith("New Chat"):
-                    short_desc = st.session_state.last_transcription[:25].strip()
-                    auto_name = f"{short_desc}..." if len(st.session_state.last_transcription) > 25 else short_desc
-                    # Ensure uniqueness
+                # Auto-name thread logic
+                if st.session_state.active_thread.startswith("New Chat"):
+                    clean_name = st.session_state.last_transcription.replace("LANG_WARN: ", "").replace("--- ATTACHED LOGIC SOURCE ---", "").strip()
+                    short_desc = clean_name[:25].strip()
+                    auto_name = f"{short_desc}..." if len(clean_name) > 25 else short_desc
+                    if not auto_name: auto_name = "New Discussion"
                     if auto_name in st.session_state.threads: auto_name += " (1)"
                     
                     old_safe = re.sub(r'[\\/*?:"<>|.]', "", st.session_state.active_thread).strip()
@@ -613,8 +697,11 @@ else:
 
                 save_chats(st.session_state.threads)
                 status.update(label="Done", state="complete")
+            
+            # Reset State
             st.session_state.run_trigger = False
             st.session_state.last_transcription = ""
+            st.session_state.agent_thread = None
             st.rerun()
         except Exception as e:
             st.error(f"Error: {e}")

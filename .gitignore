@@ -23,3 +23,6 @@ output/
 scratch_*.py
 finalize_git.py
 construct_history.py
+
+# Inputs
+test/
